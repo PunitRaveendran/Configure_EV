@@ -8,40 +8,40 @@
 
 ---
 
-## Log Entry: 2026-11-22 (Prompt 3 Complete)
+## Log Entry: 2026-11-22 (Prompt 4 Complete)
 
 ### What Changed:
-1. **Group Hazard Rate Pooling (`src/ct/core/pooling.py`)**:
-   - Implemented `GroupPooler` calculating empirical Bayes Gamma-Poisson hazard multipliers shared across `site`, `operator`, and `firmware` groups.
-   - Applies exponential forgetting on group statistics and clips multipliers strictly to `[Config.pooling_clip_min, Config.pooling_clip_max]`.
-2. **Belief Estimation Filter (`src/ct/core/belief.py`)**:
-   - **Step A:** `BetaBernoulliEstimator` tracking session starts/failures with conjugate Beta updates and exponential decay toward prior.
-   - **Step B:** `HMMBeliefEstimator` implementing an online 4-state forward filter ($O(1)$ per event) across states: *Healthy*, *Degraded*, *Dead-end*, and *Offline*.
-   - Features:
-     - Continuous-time exponential forgetting toward the group-pooled prior ($t_{1/2} = 3600$s).
-     - Vehicle-side failure buffer so isolated single failures do not prematurely condemn healthy chargers.
-     - Delivered vs rated power ratio incorporation for degraded state detection.
-     - Unreliability/entropy calculation ($H \in [0.0, 1.0]$) and active probing candidate selection (~5% requests for vehicles with slack range).
-     - Streaming serialization to `ConnectorBeliefEvent`.
-3. **Verification & Tests (`tests/test_belief.py`)**:
-   - Probabilities sum to 1.0 under updates and continuous time decay.
-   - $P(\text{start})$ falls sharply under consecutive timeouts and recovers after successful sessions.
-   - One failure alone does not mark a connector as Dead-end ($P(\text{deadend}) < 0.40$).
-   - Stale belief decays back to baseline prior over 4 half-lives.
-   - Sibling connector failure in the same firmware/site group raises suspicion on unvisited connectors.
-   - Numerically robust under `prior_scale = 0.7` and `1.3`.
-   - Beta-Bernoulli fallback verified.
-4. **Dev Seeds Calibration (`scripts/check_calibration.py` & `docs/CALIBRATION.md`)**:
-   - Replayed dev seeds 0–9 through `HMMBeliefEstimator` and evaluated first-attempt predictions.
-   - **Brier Score:** **0.1808** (vs uninformative baseline of ~0.250).
-   - Produced 5-bin reliability table and documented calibration gap in intermediate bins due to stealth dead-end misreporting.
-   - Total test suite: 27 passed.
+1. **Prospective Space-Time Cluster Scanner (`src/ct/core/scan.py`)**:
+   - Implemented `KulldorffClusterScanner` monitoring rolling retrospective windows (15, 30, 60, 120 min) across `site`, `operator`, `firmware`, and `operator_x_firmware`.
+   - Computes exact Log-Likelihood Ratio:
+     $$\text{LLR} = c \ln(c/e) + (n-c) \ln((n-c)/(n-e))$$
+     with edge-case protection ($c \le e$, $n = c$, $e = 0$).
+   - Enforces persistence requirement (alert triggered only after exceeding threshold for 2 consecutive 1-minute evaluations).
+   - Suppresses nested alerts (site alerts suppressed when parent operator or firmware alert is active; fleet alerts require failure spread across $\ge 2$ distinct sites).
+   - Calibrated null threshold ($\theta = 8.50$) sized to 1 false alarm per simulated week. Documented methodology in `docs/SCAN.md`.
+2. **Expected Trip-Time Router (`src/ct/core/router.py`)**:
+   - Implemented `ExpectedTimeRouter(Policy)` ranking connectors by:
+     $$T = t + p(w + s) + (1 - p)(t_{\text{fail}} + T_{\text{next}})$$
+   - Features 1-step lookahead recursion evaluating $T_{\text{next}}$ across next candidate connectors.
+   - Respects vehicle battery range with reserve SoC (rejects connectors beyond safe energy reach).
+   - Produces structured `RouteDecisionEvent` with plain human-readable reasoning strings and penalizes connectors with active cluster alerts.
+3. **Demand-Weighted Repair Queue (`src/ct/core/tickets.py`)**:
+   - Implemented `TicketManager` ranking repair priority by:
+     $$\text{priority} = (1 - p) \times \text{local\_demand\_rate}$$
+   - Grouped ticketing: produces **ONE** grouped `OpsTicketEvent` upon a `ClusterAlertEvent` with heuristic first-check hints (labeled explicitly as heuristics).
+4. **Verification & Tests (`tests/test_scan_router_tickets.py`)**:
+   - Verified cluster detection for injected site outage, operator backend outage, and firmware bug.
+   - Verified nested alert suppression (site alert suppressed inside operator alert).
+   - Verified null false-alarm budget on 50 evaluations.
+   - Verified router selects a slightly farther healthy connector over a near failing connector ($p=0.20$).
+   - Verified repair ticket ranking changes with demand rate (high-demand site prioritized over low-demand site).
+   - Total test suite: 32 passed.
 
 ### Needs Decision / Parameter Values:
 - None.
 
 ### What is Unverified:
-- Prospective space-time scan (LLR and Monte Carlo thresholding), expected-time router, and repair queue tickets (Prompt 4).
+- Baselines A/B/C/D comparison across seeds and matched false-alarm sweeps (Prompt 5).
 
 ### Next Step:
-- Execute **Prompt 4**: Implement `src/ct/core/scan.py` (prospective Kulldorff space-time scan), `src/ct/core/router.py` (expected trip-time router with 1-step lookahead), and `src/ct/core/tickets.py` (demand-weighted repair queue).
+- Execute **Prompt 5**: Implement `src/ct/baselines/failcount.py` (Arm B), `src/ct/baselines/usagegap.py` (Arm C), evaluation harness `src/ct/eval/harness.py`, metrics, paired bootstrap confidence intervals, and pre-registration document `docs/PREREG.md` (Gate G2).
