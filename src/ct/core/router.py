@@ -190,3 +190,84 @@ class ExpectedTimeRouter(Policy):
         """Policy interface implementation."""
         ranked_ids, _ = self.plan_route(request, view)
         return ranked_ids
+
+
+class BeliefPolicy(Policy):
+    """Full Arm D policy: Online HMM belief filter + Group Pooling + Space-Time Scan + Router."""
+    def __init__(
+        self,
+        config: Config,
+        enable_pooling: bool = True,
+        enable_scan: bool = True,
+        enable_probing: bool = True,
+    ):
+        self.config = config
+        self.enable_pooling = enable_pooling
+        self.enable_scan = enable_scan
+        self.enable_probing = enable_probing
+
+        from ct.core.belief import HMMBeliefEstimator
+        from ct.core.pooling import GroupPooler
+        from ct.core.scan import KulldorffClusterScanner
+
+        self.pooler = GroupPooler(config) if enable_pooling else None
+        self.estimator: Optional[HMMBeliefEstimator] = None
+        self.scanner: Optional[KulldorffClusterScanner] = None
+        self.router: Optional[ExpectedTimeRouter] = None
+
+        self._last_processed_status_ts: Dict[str, int] = {}
+        self._last_processed_sess_idx = 0
+
+    def _init_components_if_needed(self, view: ObservableSimulationView) -> None:
+        if self.estimator is None:
+            from ct.core.belief import HMMBeliefEstimator
+            from ct.core.scan import KulldorffClusterScanner
+
+            self.estimator = HMMBeliefEstimator(
+                self.config, connectors_meta=view.connectors, pooler=self.pooler
+            )
+            self.scanner = KulldorffClusterScanner(self.config, connectors_meta=view.connectors)
+            self.router = ExpectedTimeRouter(
+                self.config,
+                belief_estimator=self.estimator,
+                active_alert_group_keys=set(),
+            )
+
+    def choose(
+        self,
+        request: VehicleRequestEvent,
+        view: ObservableSimulationView,
+    ) -> List[str]:
+        self._init_components_if_needed(view)
+
+        # Ingest new status heartbeats
+        for c_id, st in view.latest_statuses.items():
+            if st.event_ts > self._last_processed_status_ts.get(c_id, 0):
+                self.estimator.update(st)
+                self._last_processed_status_ts[c_id] = st.event_ts
+
+        # Ingest new session outcomes
+        history = view.session_history
+        while self._last_processed_sess_idx < len(history):
+            sess = history[self._last_processed_sess_idx]
+            self.estimator.update(sess)
+            if self.enable_scan:
+                self.scanner.record_session(sess)
+            self._last_processed_sess_idx += 1
+
+        # Evaluate scan alerts if enabled
+        if self.enable_scan:
+            alerts = self.scanner.evaluate(request.event_ts)
+            active_keys = {a.group_key for a in alerts}
+            self.router.active_alert_group_keys = active_keys
+
+        # Check active probing if enabled
+        if self.enable_probing:
+            probes = self.estimator.probe_candidates(request, request.event_ts)
+            if probes and (request.current_soc - request.reserve_soc) > 0.15:
+                # 5% probe rate
+                hash_val = abs(hash(f"probe_{request.request_id}")) % 100
+                if hash_val < int(self.config.probe_rate * 100):
+                    return probes + self.router.choose(request, view)
+
+        return self.router.choose(request, view)
