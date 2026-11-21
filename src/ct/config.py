@@ -54,6 +54,8 @@ class Config:
     num_operators: int = 4
     num_models: int = 5
     num_firmwares: int = 3
+    baseline_deadend_count: int = 44
+    baseline_degraded_count: int = 20
     target_first_attempt_success: float = 0.71
 
     # Synthetic Chennai bounding box
