@@ -439,3 +439,24 @@ def replay_events_jsonl(
             if callback:
                 callback(data)
             yield data
+
+
+if __name__ == "__main__":
+    from ct.baselines.reported import ReportedStatusPolicy
+
+    print("Running Charger Truth simulator (1 hour demo run)...")
+    cfg = Config()
+    eng = SimEngine(cfg, seed=42, duration_sec=3600)
+    eng.schedule = build_scenario_schedule(
+        "baseline", eng.connectors, eng.sites, eng.start_ts, seed=42, config=cfg
+    )
+    pol = ReportedStatusPolicy()
+    evs = eng.run(pol)
+
+    starts = sum(1 for s in eng.session_events if s.outcome == SessionOutcome.STARTED)
+    fails = len(eng.session_events) - starts
+    print(f"Simulation completed: {len(evs)} total events generated.")
+    print(f"Session attempts: {len(eng.session_events)} | Started: {starts} | Failed/Timeout: {fails}")
+    out_file = Path("events_demo.jsonl")
+    export_events_jsonl(evs, out_file)
+    print(f"Exported events to {out_file.resolve()}")
