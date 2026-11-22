@@ -13,8 +13,9 @@ from ct.config import Config
 from ct.sim.engine import SimEngine, build_scenario_schedule
 from ct.baselines.reported import ReportedStatusPolicy
 from ct.core.router import BeliefPolicy
+import tempfile
 
-LOG_DIR = "/tmp/verify_logs"
+LOG_DIR = os.path.join(tempfile.gettempdir(), "verify_logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
 def run_simulation(arm_name: str, seed: int, duration_sec: int = 3600) -> str:

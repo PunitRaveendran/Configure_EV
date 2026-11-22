@@ -71,6 +71,14 @@ class Config:
     # Pipeline latency target (p95 latency in ms)
     p95_latency_target_ms: float = 500.0
 
+    # Operational heuristics & parameters (no magic numbers outside config)
+    detour_penalty_min: float = 5.0
+    wait_heuristic_charging_min: float = 12.0
+    wait_heuristic_faulted_min: float = 5.0
+    heartbeat_interval_sec: int = 60
+    usage_gap_expected_idle_sec: float = 900.0
+    usage_gap_multiplier: float = 1.5
+
     # Parameters not specified in spec are explicitly set to None (tracked in PROGRESS.md)
     unspecified_param_example: Optional[Any] = None
 

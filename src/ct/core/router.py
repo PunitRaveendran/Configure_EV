@@ -82,9 +82,9 @@ class ExpectedTimeRouter(Policy):
             st = view.get_latest_status(c_id)
             wait_min = 0.0
             if st and st.reported_status == ReportedStatus.CHARGING:
-                wait_min = 12.0  # expected remaining charge duration heuristic
+                wait_min = self.config.wait_heuristic_charging_min
             elif st and st.reported_status in (ReportedStatus.FAULTED, ReportedStatus.OFFLINE):
-                wait_min = 5.0
+                wait_min = self.config.wait_heuristic_faulted_min
 
             # Charging time estimate
             charge_power = min(request.max_charge_rate_kw, meta.rated_kw)
@@ -200,11 +200,15 @@ class BeliefPolicy(Policy):
         enable_pooling: bool = True,
         enable_scan: bool = True,
         enable_probing: bool = True,
+        enable_vehicle_outcomes: bool = True,
+        p_flag_threshold: float = 0.50,
     ):
         self.config = config
         self.enable_pooling = enable_pooling
         self.enable_scan = enable_scan
         self.enable_probing = enable_probing
+        self.enable_vehicle_outcomes = enable_vehicle_outcomes
+        self.p_flag_threshold = p_flag_threshold
 
         from ct.core.belief import HMMBeliefEstimator
         from ct.core.pooling import GroupPooler
@@ -215,8 +219,15 @@ class BeliefPolicy(Policy):
         self.scanner: Optional[KulldorffClusterScanner] = None
         self.router: Optional[ExpectedTimeRouter] = None
 
+        self.flagged_at_ts: Dict[str, int] = {}
         self._last_processed_status_ts: Dict[str, int] = {}
         self._last_processed_sess_idx = 0
+
+    def is_flagged(self, connector_id: str, now: int) -> bool:
+        """Check if connector is flagged as degraded/unhealthy by belief threshold."""
+        if self.estimator is None:
+            return False
+        return bool(self.estimator.p_start(connector_id, now) < self.p_flag_threshold)
 
     def _init_components_if_needed(self, view: ObservableSimulationView) -> None:
         if self.estimator is None:
@@ -239,6 +250,7 @@ class BeliefPolicy(Policy):
         view: ObservableSimulationView,
     ) -> List[str]:
         self._init_components_if_needed(view)
+        now = request.event_ts
 
         # Ingest new status heartbeats
         for c_id, st in view.latest_statuses.items():
@@ -250,20 +262,33 @@ class BeliefPolicy(Policy):
         history = view.session_history
         while self._last_processed_sess_idx < len(history):
             sess = history[self._last_processed_sess_idx]
-            self.estimator.update(sess)
+            if self.enable_vehicle_outcomes:
+                self.estimator.update(sess)
             if self.enable_scan:
                 self.scanner.record_session(sess)
             self._last_processed_sess_idx += 1
 
         # Evaluate scan alerts if enabled
         if self.enable_scan:
-            alerts = self.scanner.evaluate(request.event_ts)
+            alerts = self.scanner.evaluate(now)
             active_keys = {a.group_key for a in alerts}
             self.router.active_alert_group_keys = active_keys
+            for a in alerts:
+                if a.group_key not in self.flagged_at_ts:
+                    self.flagged_at_ts[a.group_key] = a.event_ts
+
+        # Update connector-level flag timestamps
+        for c_id in view.connectors:
+            p = self.estimator.p_start(c_id, now)
+            if p < self.p_flag_threshold:
+                if c_id not in self.flagged_at_ts:
+                    self.flagged_at_ts[c_id] = now
+            elif p >= self.p_flag_threshold and c_id in self.flagged_at_ts:
+                del self.flagged_at_ts[c_id]
 
         # Check active probing if enabled
         if self.enable_probing:
-            probes = self.estimator.probe_candidates(request, request.event_ts)
+            probes = self.estimator.probe_candidates(request, now)
             if probes and (request.current_soc - request.reserve_soc) > 0.15:
                 # 5% probe rate
                 hash_val = abs(hash(f"probe_{request.request_id}")) % 100

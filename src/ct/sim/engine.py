@@ -159,7 +159,7 @@ class SimEngine:
 
         # Simulation timeline variables
         current_ts = self.start_ts
-        heartbeat_interval_sec = 60
+        heartbeat_interval_sec = self.config.heartbeat_interval_sec
         next_heartbeat_sec = 0
 
         # Generate initial heartbeat status for all connectors

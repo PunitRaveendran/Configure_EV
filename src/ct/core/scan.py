@@ -65,6 +65,13 @@ class KulldorffClusterScanner:
         self.eval_states: Dict[str, GroupEvaluationState] = {}
         # Active alerts: group_key -> ClusterAlertEvent
         self.active_alerts: Dict[str, ClusterAlertEvent] = {}
+        # Historical list of all emitted alerts
+        self.emitted_alerts: List[ClusterAlertEvent] = []
+
+    @property
+    def alerts(self) -> List[ClusterAlertEvent]:
+        """All alerts emitted during simulation."""
+        return self.emitted_alerts
 
     def record_session(self, event: VehicleSessionEvent) -> None:
         """Ingest vehicle session attempt outcome."""
@@ -239,5 +246,6 @@ class KulldorffClusterScanner:
 
             suppressed_alerts.append(alert)
             self.active_alerts[f"{alert.group_type.value}:{alert.group_key}"] = alert
+            self.emitted_alerts.append(alert)
 
         return suppressed_alerts
